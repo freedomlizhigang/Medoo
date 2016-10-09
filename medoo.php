@@ -7,7 +7,7 @@
  * Copyright 2016, Angel Lai
  * Released under the MIT license
  */
-class medoo
+class Medoo
 {
 	// General
 	protected $database_type;
@@ -281,7 +281,6 @@ class medoo
 	protected function data_implode($data, $conjunctor, $outer_conjunctor = null)
 	{
 		$wheres = array();
-
 		foreach ($data as $key => $value)
 		{
 			$type = gettype($value);
@@ -423,7 +422,6 @@ class medoo
 				}
 			}
 		}
-
 		return implode($conjunctor . ' ', $wheres);
 	}
 
@@ -454,13 +452,17 @@ class medoo
 			if (!empty($where_AND))
 			{
 				$value = array_values($where_AND);
-				$where_clause = ' WHERE ' . $this->data_implode($where[ $value[ 0 ] ], ' AND');
+				if (count($where[$value[0]]) != 0) {
+					$where_clause = ' WHERE ' . $this->data_implode($where[ $value[ 0 ] ], ' AND');
+				}
 			}
 
 			if (!empty($where_OR))
 			{
 				$value = array_values($where_OR);
-				$where_clause = ' WHERE ' . $this->data_implode($where[ $value[ 0 ] ], ' OR');
+				if (count($where[$value[0]]) != 0) {
+					$where_clause = ' WHERE ' . $this->data_implode($where[ $value[ 0 ] ], ' OR');
+				}
 			}
 
 			if (isset($where[ 'MATCH' ]))
@@ -548,12 +550,12 @@ class medoo
 				$where_clause .= ' ' . $where;
 			}
 		}
-
 		return $where_clause;
 	}
 
 	protected function select_context($table, $join, &$columns = null, $where = null, $column_fn = null)
 	{
+
 		preg_match('/([a-zA-Z0-9_\-]*)\s*\(([a-zA-Z0-9_\-]*)\)/i', $table, $table_match);
 
 		if (isset($table_match[ 1 ], $table_match[ 2 ]))
@@ -1007,7 +1009,6 @@ class medoo
 	public function count($table, $join = null, $column = null, $where = null)
 	{
 		$query = $this->query($this->select_context($table, $join, $column, $where, 'COUNT'));
-
 		return $query ? 0 + $query->fetchColumn() : false;
 	}
 
@@ -1118,6 +1119,225 @@ class medoo
 		}
 
 		return $output;
+	}
+	/* 返回带分页的列表
+	* 默认分页数10条
+	*/
+	public function list($table,$columns = null, $where = null,$page = 1,$pagesize = 10,$join = null,$setpages = 10,$array = array())
+	{
+		$column = $where == null ? $join : $columns;
+		$is_single_column = (is_string($column) && $column !== '*');
+
+		// 分页用的
+		$page = max(intval($page), 1);
+		$offset = $pagesize*($page-1);
+		// 查询总条数，计算当前页数等
+		$number = $this->count($table, $where);
+		$pages = $this->pages($number, $page, $pagesize, $array, $setpages);
+		$where['LIMIT'] = [$offset,$pagesize];
+
+		if (is_null($join)) {
+			$query = $this->query($this->select_context($table,$columns, $where));
+		}
+		else
+		{
+			$query = $this->query($this->select_context($table,$join,$columns, $where));
+		}
+
+
+		$stack = array();
+
+		$index = 0;
+
+		if (!$query)
+		{
+			return false;
+		}
+
+		if ($columns === '*')
+		{
+			$stack = $query->fetchAll(PDO::FETCH_ASSOC);
+		}
+
+		if ($is_single_column)
+		{
+			$stack = $query->fetchAll(PDO::FETCH_COLUMN);
+		}
+
+		while ($row = $query->fetch(PDO::FETCH_ASSOC))
+		{
+			foreach ($columns as $key => $value)
+			{
+				if (is_array($value))
+				{
+					$this->data_map($index, $key, $value, $row, $stack);
+				}
+				else
+				{
+					$this->data_map($index, $key, preg_replace('/^[\w]*\./i', "", $value), $row, $stack);
+				}
+			}
+
+			$index++;
+		}
+
+		$list = ['list'=>$stack,'pages'=>$pages];
+		return $list;
+	}
+	/**
+	 * 分页函数
+	 *
+	 * @param $num 信息总数
+	 * @param $curr_page 当前分页
+	 * @param $perpage 每页显示数
+	 * @param $array 需要传递的数组，用于增加额外的方法
+	 * @return 分页
+	 */
+	final public function pages($num, $curr_page, $perpage = 20, $array = array(),$setpages = 10) {
+		$urlrule = $this->url_par('{$page}');
+		$multipage = '';
+		if($num > $perpage) {
+			$page = $setpages+1;
+			$offset = ceil($setpages/2-1);
+			$pages = ceil($num / $perpage);
+			if (defined('IN_ADMIN') && !defined('PAGES')) define('PAGES', $pages);
+			$from = $curr_page - $offset;
+			$to = $curr_page + $offset;
+			$more = 0;
+			if($page >= $pages) {
+				$from = 2;
+				$to = $pages-1;
+			} else {
+				if($from <= 1) {
+					$to = $page-1;
+					$from = 2;
+				}  elseif($to >= $pages) {
+					$from = $pages-($page-2);
+					$to = $pages-1;
+				}
+				$more = 1;
+			}
+			$multipage .= '<a class="a1">共 '.ceil($num/$perpage).' 页</a>';
+			if($curr_page>0) {
+				$multipage .= ' <a href="'.$this->pageurl($urlrule, $curr_page-1, $array).'" class="a1">上一页</a>';
+				if($curr_page==1) {
+					$multipage .= ' <span>1</span>';
+				} elseif($curr_page>6 && $more) {
+					$multipage .= ' <a href="'.$this->pageurl($urlrule, 1, $array).'">1</a>';
+				} else {
+					$multipage .= ' <a href="'.$this->pageurl($urlrule, 1, $array).'">1</a>';
+				}
+			}
+			for($i = $from; $i <= $to; $i++) {
+				if($i != $curr_page) {
+					$multipage .= ' <a href="'.$this->pageurl($urlrule, $i, $array).'">'.$i.'</a>';
+				} else {
+					$multipage .= ' <span>'.$i.'</span>';
+				}
+			}
+			if($curr_page<$pages) {
+				if($curr_page<$pages-5 && $more) {
+					$multipage .= '<a href="'.$this->pageurl($urlrule, $pages, $array).'">'.$pages.'</a> <a href="'.$this->pageurl($urlrule, $curr_page+1, $array).'" class="a1">下一页</a>';
+				} else {
+					$multipage .= ' <a href="'.$this->pageurl($urlrule, $pages, $array).'">'.$pages.'</a> <a href="'.$this->pageurl($urlrule, $curr_page+1, $array).'" class="a1">下一页</a>';
+				}
+			} elseif($curr_page==$pages) {
+				$multipage .= ' <span>'.$pages.'</span> <a href="'.$this->pageurl($urlrule, $curr_page, $array).'" class="a1">下一页</a>';
+			} else {
+				$multipage .= ' <a href="'.$this->pageurl($urlrule, $pages, $array).'">'.$pages.'</a> <a href="'.$this->pageurl($urlrule, $curr_page+1, $array).'" class="a1">下一页</a>';
+			}
+		}
+		return $multipage;
+	}
+	/**
+	 * 返回分页路径
+	 *
+	 * @param $urlrule 分页规则
+	 * @param $page 当前页
+	 * @param $array 需要传递的数组，用于增加额外的方法
+	 * @return 完整的URL路径
+	 */
+	final public function pageurl($urlrule, $page, $array = array(), $restr = '') {
+		if(strpos($urlrule, '~')) {
+			$urlrules = explode('~', $urlrule);
+			$urlrule = $page < 2 ? $urlrules[0] : $urlrules[1];
+		}
+		$findme = array('{$page}');
+		$replaceme = array($page);
+		if (is_array($array)) foreach ($array as $k=>$v) {
+			$findme[] = '{$'.$k.'}';
+			$replaceme[] = $v;
+		}
+		$url = str_replace($findme, $replaceme, $urlrule);
+		$url = str_replace(array('http://','//','~',$restr), array('~','/','http://'), $url);
+		return $url;
+	}
+	/**
+	 * URL路径解析，pages 函数的辅助函数
+	 *
+	 * @param $par 传入需要解析的变量 默认为，page={$page}
+	 * @param $url URL地址
+	 * @return URL
+	 */
+	final public function url_par($par, $url = '') {
+		if($url == '') $url = $this->get_url();
+
+		$pos1 = strpos($url,'?');
+		$pos = strpos($url, '?p=');
+		$pos2 = strpos($url,'&p=');
+		// 没有?及?p=的时候说时没有分页，直接加分页链接
+		if ($pos1 === false && $pos === false) {
+			$url .= '?p='.$par;
+		}
+		else
+		{
+			// 有?或者?p说明有其它的参数或者分页，直接添加&p
+			if ($pos2 !== false) {
+				$url = substr($url, 0, $pos2).'&p='.$par;
+			}
+			else
+			{
+				$url .= '&p='.$par;
+			}
+		}
+		// 只有分页?p的时候改成?p
+		if ($pos !== false && $pos1 !== false)
+		{
+			$url = substr($url, 0, $pos).'?p='.$par;
+		}
+		return $url;
+	}
+	/**
+	 * 获取当前页面完整URL地址
+	 */
+	final public function get_url() {
+		$sys_protocal = isset($_SERVER['SERVER_PORT']) && $_SERVER['SERVER_PORT'] == '443' ? 'https://' : 'http://';
+		$php_self = $_SERVER['PHP_SELF'] ? $this->safe_replace($_SERVER['PHP_SELF']) : $this->safe_replace($_SERVER['SCRIPT_NAME']);
+		$path_info = isset($_SERVER['PATH_INFO']) ? $this->safe_replace($_SERVER['PATH_INFO']) : '';
+		$relate_url = isset($_SERVER['REQUEST_URI']) ? $this->safe_replace($_SERVER['REQUEST_URI']) : $php_self.(isset($_SERVER['QUERY_STRING']) ? '?'.$this->safe_replace($_SERVER['QUERY_STRING']) : $path_info);
+		return $sys_protocal.(isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : '').$relate_url;
+	}
+	/**
+	 * 安全过滤函数
+	 *
+	 * @param $string
+	 * @return string
+	 */
+	final public function safe_replace($string) {
+		$string = str_replace('%20','',$string);
+		$string = str_replace('%27','',$string);
+		$string = str_replace('%2527','',$string);
+		$string = str_replace('*','',$string);
+		$string = str_replace('"','&quot;',$string);
+		$string = str_replace("'",'',$string);
+		$string = str_replace('"','',$string);
+		$string = str_replace(';','',$string);
+		$string = str_replace('<','&lt;',$string);
+		$string = str_replace('>','&gt;',$string);
+		$string = str_replace("{",'',$string);
+		$string = str_replace('}','',$string);
+		$string = str_replace('\\','',$string);
+		return $string;
 	}
 }
 ?>
